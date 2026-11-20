@@ -102,6 +102,11 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   }
 
   private synchronized Admin admin() {
+    // every operation goes through here: the caller must be this catalog's tenant (or the platform)
+    FlussCallers.check(
+        conf.get(FlussCatalogPropertiesMetadata.TENANT),
+        PrincipalUtils.getCurrentUserName(),
+        FlussCallers.servicePrincipals());
     if (admin == null) {
       Configuration c = new Configuration();
       for (String k :

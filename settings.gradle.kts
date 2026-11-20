@@ -46,6 +46,7 @@ include(
 include("catalogs:catalog-fileset")
 include("catalogs:catalog-kafka")
 include("catalogs:catalog-fluss")
+include("catalogs:catalog-fluss-guard")
 include("catalogs:catalog-model")
 
 include("catalogs-contrib:catalog-jdbc-clickhouse")
