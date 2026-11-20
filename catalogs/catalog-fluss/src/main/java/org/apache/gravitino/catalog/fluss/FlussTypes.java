@@ -116,8 +116,8 @@ final class FlussTypes {
           Types.TimestampType ts = (Types.TimestampType) t;
           d =
               ts.hasTimeZone()
-                  ? DataTypes.TIMESTAMP_LTZ(ts.precision())
-                  : DataTypes.TIMESTAMP(ts.precision());
+                  ? DataTypes.TIMESTAMP_LTZ(precisionOrDefault(ts.precision()))
+                  : DataTypes.TIMESTAMP(precisionOrDefault(ts.precision()));
           break;
         }
       case BINARY:
@@ -130,5 +130,10 @@ final class FlussTypes {
         throw new IllegalArgumentException("Fluss tables do not support the type " + t);
     }
     return nullable ? d.copy(true) : d.copy(false);
+  }
+
+  /** Gravitino reports an unspecified precision as a negative number; Fluss defaults to 6. */
+  private static int precisionOrDefault(int p) {
+    return p < 0 ? 6 : p;
   }
 }
