@@ -93,10 +93,13 @@ public class FlussSecretsTest {
   }
 
   @Test
-  void theCatalogDoesNotDeclareAPasswordProperty() {
+  void thePasswordPropertyIsReserved() {
     Map<String, PropertyEntry<?>> entries = new FlussCatalogPropertiesMetadata().propertyEntries();
     assertTrue(entries.containsKey("client.security.sasl.password.ref"));
-    assertFalse(entries.containsKey("client.security.sasl.password"));
+    // declared only to be reserved: Gravitino then refuses a catalog created with it
+    assertTrue(entries.get("client.security.sasl.password").isReserved());
+    assertTrue(entries.get("client.security.sasl.jaas.config").isReserved());
+    assertFalse(entries.get("client.security.sasl.password.ref").isReserved());
   }
 
   @Test

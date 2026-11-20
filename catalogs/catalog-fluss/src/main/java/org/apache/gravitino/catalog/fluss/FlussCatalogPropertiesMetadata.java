@@ -37,6 +37,8 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
   public static final String SASL_PASSWORD_REF = "client.security.sasl.password.ref";
   /** The Fluss client's own key for the password; set by the provider after resolving the ref. */
   static final String FLUSS_SASL_PASSWORD = "client.security.sasl.password";
+
+  static final String FLUSS_SASL_JAAS = "client.security.sasl.jaas.config";
   /** The Iceberg catalog that holds the lake copies (shown in the table's lake location). */
   public static final String LAKE_CATALOG = "lake.catalog";
 
@@ -66,6 +68,17 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
                   false,
                   null,
                   false))
+          // Reserved: Gravitino refuses a catalog created with these (an inline password would be
+          // stored in
+          // the entity store). The password only ever comes from the secret reference above.
+          .put(
+              FLUSS_SASL_PASSWORD,
+              PropertyEntry.stringReservedPropertyEntry(
+                  FLUSS_SASL_PASSWORD, "Not allowed: use " + SASL_PASSWORD_REF, true))
+          .put(
+              FLUSS_SASL_JAAS,
+              PropertyEntry.stringReservedPropertyEntry(
+                  FLUSS_SASL_JAAS, "Not allowed: use " + SASL_PASSWORD_REF, true))
           .put(
               LAKE_CATALOG,
               PropertyEntry.stringOptionalPropertyEntry(
