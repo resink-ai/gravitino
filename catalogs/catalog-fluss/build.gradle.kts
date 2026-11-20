@@ -31,6 +31,7 @@ dependencies {
 
   // The Fluss admin client. The version is pinned (spike F): the cluster image is a 1.1-SNAPSHOT fork,
   // the client of the 1.0.0 release talked to it in the spike tests.
+  implementation(project(":catalogs:catalog-fluss-guard")) // SecretKeys: one key policy for guard and provider
   implementation("org.apache.fluss:fluss-client:1.0.0")
   implementation(libs.guava)
   implementation(libs.slf4j.api)

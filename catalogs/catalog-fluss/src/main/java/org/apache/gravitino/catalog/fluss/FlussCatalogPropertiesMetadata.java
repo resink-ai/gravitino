@@ -41,6 +41,11 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
   static final String FLUSS_SASL_JAAS = "client.security.sasl.jaas.config";
   /** The tenant this catalog belongs to; only that tenant (and service principals) may call it. */
   public static final String TENANT = "resink.tenant";
+  /**
+   * Set by the platform on every catalog it provisions; cleanup deletes only catalogs that carry
+   * it.
+   */
+  public static final String MANAGED_BY = "resink.managed-by";
   /** The Iceberg catalog that holds the lake copies (shown in the table's lake location). */
   public static final String LAKE_CATALOG = "lake.catalog";
 
@@ -85,6 +90,10 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
               TENANT,
               PropertyEntry.stringImmutablePropertyEntry(
                   TENANT, "Tenant that owns this catalog (set once)", false, null, false, false))
+          .put(
+              MANAGED_BY,
+              PropertyEntry.stringImmutablePropertyEntry(
+                  MANAGED_BY, "Marks a catalog the platform owns", false, null, false, false))
           .put(
               LAKE_CATALOG,
               PropertyEntry.stringOptionalPropertyEntry(

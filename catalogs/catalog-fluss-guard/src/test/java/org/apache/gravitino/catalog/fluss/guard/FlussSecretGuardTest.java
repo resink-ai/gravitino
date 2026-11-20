@@ -19,9 +19,12 @@
 package org.apache.gravitino.catalog.fluss.guard;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
+import java.util.Set;
 import org.apache.gravitino.Catalog;
 import org.apache.gravitino.CatalogChange;
 import org.apache.gravitino.NameIdentifier;
@@ -32,47 +35,98 @@ import org.apache.gravitino.listener.api.info.CatalogInfo;
 import org.junit.jupiter.api.Test;
 
 public class FlussSecretGuardTest {
-  private final FlussSecretGuard guard = new FlussSecretGuard();
   private final NameIdentifier id = NameIdentifier.of("lake", "fluss_t");
 
-  private CreateCatalogPreEvent create(String provider, Map<String, String> props) {
+  private FlussSecretGuard guard(String provider) {
+    FlussSecretGuard g = new FlussSecretGuard();
+    g.services = Set.of("admin");
+    g.providerOf = i -> provider;
+    return g;
+  }
+
+  private CreateCatalogPreEvent create(String user, String provider, Map<String, String> props) {
     return new CreateCatalogPreEvent(
-        "admin",
-        id,
-        new CatalogInfo("fluss_t", Catalog.Type.RELATIONAL, provider, "", props, null));
+        user, id, new CatalogInfo("fluss_t", Catalog.Type.RELATIONAL, provider, "", props, null));
+  }
+
+  private AlterCatalogPreEvent alter(String user, String key) {
+    return new AlterCatalogPreEvent(
+        user, id, new CatalogChange[] {CatalogChange.setProperty(key, "x")});
   }
 
   @Test
   void inlinePasswordIsRefusedOnCreate() {
+    FlussSecretGuard g = guard("fluss");
     assertThrows(
         ForbiddenException.class,
-        () -> guard.onPreEvent(create("fluss", Map.of("client.security.sasl.password", "x"))));
+        () -> g.onPreEvent(create("admin", "fluss", Map.of("client.security.sasl.password", "x"))));
     assertThrows(
         ForbiddenException.class,
-        () -> guard.onPreEvent(create("fluss", Map.of("client.security.sasl.jaas.config", "x"))));
+        () ->
+            g.onPreEvent(
+                create("admin", "fluss", Map.of("client.security.sasl.jaas.config", "x"))));
   }
 
   @Test
-  void referenceIsAllowedOnCreate() {
+  void referenceIsAllowedOnCreateByTheService() {
     assertDoesNotThrow(
         () ->
-            guard.onPreEvent(
-                create("fluss", Map.of("client.security.sasl.password.ref", "fluss_t"))));
+            guard("fluss")
+                .onPreEvent(
+                    create(
+                        "admin", "fluss", Map.of("client.security.sasl.password.ref", "fluss_t"))));
+  }
+
+  @Test
+  void onlyTheServiceMayCreateOrAlterAFlussCatalog() {
+    FlussSecretGuard g = guard("fluss");
+    assertThrows(
+        ForbiddenException.class,
+        () -> g.onPreEvent(create("tenant_a", "fluss", Map.of("resink.tenant", "tenant_a"))));
+    assertThrows(
+        ForbiddenException.class,
+        () -> g.onPreEvent(alter("tenant_a", "client.security.sasl.username")));
+    assertDoesNotThrow(() -> g.onPreEvent(alter("admin", "lake.catalog")));
   }
 
   @Test
   void otherProvidersAreNotTouched() {
     assertDoesNotThrow(
-        () -> guard.onPreEvent(create("lakehouse-iceberg", Map.of("jdbc-password", "x"))));
+        () ->
+            guard("lakehouse-iceberg")
+                .onPreEvent(create("tenant_a", "lakehouse-iceberg", Map.of("jdbc-password", "x"))));
+    assertDoesNotThrow(
+        () -> guard("lakehouse-iceberg").onPreEvent(alter("admin", "jdbc-password")));
   }
 
   @Test
-  void inlinePasswordIsRefusedOnAlter() {
-    CatalogChange[] bad = {CatalogChange.setProperty("client.security.sasl.password", "x")};
-    assertThrows(
-        ForbiddenException.class,
-        () -> guard.onPreEvent(new AlterCatalogPreEvent("admin", id, bad)));
-    CatalogChange[] ok = {CatalogChange.setProperty("lake.catalog", "shared")};
-    assertDoesNotThrow(() -> guard.onPreEvent(new AlterCatalogPreEvent("admin", id, ok)));
+  void everyVariantOfASecretKeyIsRefusedOnAlterOfAFlussCatalog() {
+    FlussSecretGuard g = guard("fluss");
+    for (String key :
+        new String[] {
+          "password",
+          "client.security.sasl.password",
+          "Client.Security.SASL.PASSWORD",
+          "gravitino.bypass.sasl.jaas.config",
+          "gravitino.bypass.anything",
+          "client.security.sasl.jaas.config",
+          "my.Secret.key"
+        }) {
+      assertThrows(ForbiddenException.class, () -> g.onPreEvent(alter("admin", key)), key);
+    }
+  }
+
+  @Test
+  void anUnknownProviderGetsTheSameKeyPolicy() {
+    FlussSecretGuard g = guard(null);
+    assertThrows(ForbiddenException.class, () -> g.onPreEvent(alter("admin", "Password")));
+    assertDoesNotThrow(() -> g.onPreEvent(alter("admin", "lake.catalog")));
+  }
+
+  @Test
+  void theKeyPolicyIsCaseInsensitiveAndAllowsOnlyTheReference() {
+    assertFalse(SecretKeys.refused("client.security.sasl.password.ref"));
+    assertTrue(SecretKeys.refused("CLIENT.SECURITY.SASL.PASSWORD.REF"));
+    assertFalse(SecretKeys.refused("lake.catalog"));
   }
 }

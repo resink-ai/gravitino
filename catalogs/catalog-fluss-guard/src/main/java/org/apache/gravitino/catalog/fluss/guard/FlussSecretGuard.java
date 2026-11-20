@@ -18,8 +18,14 @@
  */
 package org.apache.gravitino.catalog.fluss.guard;
 
+import java.util.Arrays;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.apache.gravitino.CatalogChange;
+import org.apache.gravitino.GravitinoEnv;
+import org.apache.gravitino.NameIdentifier;
 import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.listener.api.EventListenerPlugin;
 import org.apache.gravitino.listener.api.event.AlterCatalogPreEvent;
@@ -27,25 +33,32 @@ import org.apache.gravitino.listener.api.event.CreateCatalogPreEvent;
 import org.apache.gravitino.listener.api.event.PreEvent;
 
 /**
- * Refuses a Fluss catalog that carries a secret value, before Gravitino stores it.
+ * Guards {@code fluss} catalogs before Gravitino stores anything, independent of the authorization
+ * plugin.
  *
  * <p>Gravitino writes a catalog's entity before the provider validates it, so a refusal inside the
- * provider leaves the refused properties in the entity store. This listener runs on the synchronous
- * pre-events of catalog creation and alteration, which run before anything is stored, and denies
- * (403) the request. It is a plugin (configured with {@code gravitino.eventListener.names}), not a
- * change to Gravitino's core.
+ * provider is too late. This listener runs on the synchronous pre-events of catalog creation and
+ * alteration and denies (403):
  *
- * <p>What is refused: on creation of a catalog with provider {@code fluss}, any property whose name
- * contains "password", "secret" or "jaas" other than the reference {@code
- * client.security.sasl.password.ref}; on alteration of any catalog, setting a property in the
- * {@code client.security.sasl.} namespace that is secret-like (the alter event does not carry the
- * provider).
+ * <ul>
+ *   <li>creating or altering a {@code fluss} catalog unless the caller is a service principal
+ *       ({@code RESINK_SERVICE_PRINCIPALS}): only the platform wires a catalog to a tenant's
+ *       credentials;
+ *   <li>any property that {@link SecretKeys#refused} names, on creation, and on alteration of a
+ *       {@code fluss} catalog or of a catalog whose provider cannot be determined.
+ * </ul>
  */
 public class FlussSecretGuard implements EventListenerPlugin {
 
   static final String PROVIDER = "fluss";
-  static final String SASL_PREFIX = "client.security.sasl.";
-  static final String REF = "client.security.sasl.password.ref";
+  static final String SERVICE_PRINCIPALS_ENV = "RESINK_SERVICE_PRINCIPALS";
+
+  /**
+   * The provider of an existing catalog, null when it cannot be determined. Replaceable in tests.
+   */
+  Function<NameIdentifier, String> providerOf = FlussSecretGuard::providerFromServer;
+
+  Set<String> services = servicePrincipals(System.getenv(SERVICE_PRINCIPALS_ENV));
 
   @Override
   public void init(Map<String, String> properties) {}
@@ -61,35 +74,61 @@ public class FlussSecretGuard implements EventListenerPlugin {
     return Mode.SYNC;
   }
 
+  static Set<String> servicePrincipals(String v) {
+    if (v == null) {
+      return Set.of();
+    }
+    return Arrays.stream(v.split(","))
+        .map(String::trim)
+        .filter(s -> !s.isEmpty())
+        .collect(Collectors.toSet());
+  }
+
+  private static String providerFromServer(NameIdentifier ident) {
+    try {
+      return GravitinoEnv.getInstance().catalogManager().loadCatalog(ident).provider();
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
   @Override
   public void onPreEvent(PreEvent preEvent) throws ForbiddenException {
     if (preEvent instanceof CreateCatalogPreEvent) {
       var info = ((CreateCatalogPreEvent) preEvent).createCatalogRequest();
-      if (PROVIDER.equals(info.provider()) && info.properties() != null) {
-        for (String key : info.properties().keySet()) {
-          check(key);
+      if (PROVIDER.equals(info.provider())) {
+        requireService(preEvent.user());
+        if (info.properties() != null) {
+          info.properties().keySet().forEach(FlussSecretGuard::check);
         }
       }
     } else if (preEvent instanceof AlterCatalogPreEvent) {
-      for (CatalogChange change : ((AlterCatalogPreEvent) preEvent).catalogChanges()) {
-        if (change instanceof CatalogChange.SetProperty) {
-          String key = ((CatalogChange.SetProperty) change).getProperty();
-          if (key.startsWith(SASL_PREFIX)) {
-            check(key);
+      String provider = providerOf.apply(preEvent.identifier());
+      if (provider == null || PROVIDER.equals(provider)) {
+        if (PROVIDER.equals(provider)) {
+          requireService(preEvent.user());
+        }
+        for (CatalogChange change : ((AlterCatalogPreEvent) preEvent).catalogChanges()) {
+          if (change instanceof CatalogChange.SetProperty) {
+            check(((CatalogChange.SetProperty) change).getProperty());
           }
         }
       }
     }
   }
 
-  /** Throws if the property name would carry a secret value. */
+  private void requireService(String user) {
+    if (user == null || !services.contains(user)) {
+      throw new ForbiddenException("Only the platform may create or change a fluss catalog");
+    }
+  }
+
+  /** Throws if the property name would carry a secret value or bypass the platform's settings. */
   static void check(String key) {
-    String lower = key.toLowerCase();
-    boolean secretLike =
-        lower.contains("password") || lower.contains("secret") || lower.contains("jaas");
-    if (secretLike && !REF.equals(key)) {
+    if (SecretKeys.refused(key)) {
       throw new ForbiddenException(
-          "Property '%s' would store a secret in Gravitino; use %s instead", key, REF);
+          "Property '%s' is not allowed on a fluss catalog; secrets go in a file named by %s",
+          key, SecretKeys.REF);
     }
   }
 }

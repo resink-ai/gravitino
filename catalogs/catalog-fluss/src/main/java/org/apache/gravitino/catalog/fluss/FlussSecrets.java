@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 import java.util.regex.Pattern;
+import org.apache.gravitino.catalog.fluss.guard.SecretKeys;
 
 /**
  * Resolves the catalog's password from a secret reference, so that no password is ever stored in
@@ -65,10 +66,7 @@ final class FlussSecrets {
   /** Rejects any property that would put a secret value in the entity store. */
   static void rejectInlineSecrets(Map<String, String> conf) {
     for (String k : conf.keySet()) {
-      String lower = k.toLowerCase();
-      boolean secretLike =
-          lower.contains("password") || lower.contains("secret") || lower.contains("jaas");
-      if (secretLike && !k.equals(FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF)) {
+      if (SecretKeys.refused(k)) { // one rule, shared with the pre-persistence guard
         throw new IllegalArgumentException(
             "Property '"
                 + k

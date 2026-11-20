@@ -93,6 +93,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       Map<String, String> conf, CatalogInfo info, HasPropertyMetadata propertiesMetadata)
       throws RuntimeException {
     FlussSecrets.rejectInlineSecrets(conf);
+    FlussIdentity.check(conf);
     String ref = conf.get(FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF);
     if (ref != null) {
       FlussSecrets.checkRef(ref);
@@ -107,20 +108,25 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
         conf.get(FlussCatalogPropertiesMetadata.TENANT),
         PrincipalUtils.getCurrentUserName(),
         FlussCallers.servicePrincipals());
+    FlussIdentity.check(
+        conf); // the stored properties too: refuse a catalog wired to someone else's credentials
     if (admin == null) {
       Configuration c = new Configuration();
       for (String k :
           new String[] {
             FlussCatalogPropertiesMetadata.BOOTSTRAP_SERVERS,
             FlussCatalogPropertiesMetadata.SECURITY_PROTOCOL,
-            FlussCatalogPropertiesMetadata.SASL_MECHANISM,
-            FlussCatalogPropertiesMetadata.SASL_USERNAME
+            FlussCatalogPropertiesMetadata.SASL_MECHANISM
           }) {
         if (conf.get(k) != null) {
           c.setString(k, conf.get(k));
         }
       }
-      String ref = conf.get(FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF);
+      String user = FlussIdentity.user(conf);
+      if (user != null) {
+        c.setString(FlussCatalogPropertiesMetadata.SASL_USERNAME, user);
+      }
+      String ref = FlussIdentity.ref(conf);
       if (ref != null) {
         c.setString(
             FlussCatalogPropertiesMetadata.FLUSS_SASL_PASSWORD,
@@ -184,6 +190,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
     // Gravitino stores a catalog's properties as given, before initialize runs: refuse a secret
     // value here
     FlussSecrets.rejectInlineSecrets(properties);
+    FlussIdentity.check(properties);
     String ref = properties.get(FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF);
     if (ref != null) {
       FlussSecrets.checkRef(ref);
