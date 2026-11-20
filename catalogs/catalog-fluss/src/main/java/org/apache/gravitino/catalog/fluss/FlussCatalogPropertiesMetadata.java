@@ -30,8 +30,13 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
   public static final String SECURITY_PROTOCOL = "client.security.protocol";
   public static final String SASL_MECHANISM = "client.security.sasl.mechanism";
   public static final String SASL_USERNAME = "client.security.sasl.username";
-  /** Hidden: never returned by the Gravitino API. */
-  public static final String SASL_PASSWORD = "client.security.sasl.password";
+  /**
+   * A reference to the password (a file name in the secrets directory), never the password itself.
+   * See {@link FlussSecrets}.
+   */
+  public static final String SASL_PASSWORD_REF = "client.security.sasl.password.ref";
+  /** The Fluss client's own key for the password; set by the provider after resolving the ref. */
+  static final String FLUSS_SASL_PASSWORD = "client.security.sasl.password";
   /** The Iceberg catalog that holds the lake copies (shown in the table's lake location). */
   public static final String LAKE_CATALOG = "lake.catalog";
 
@@ -54,9 +59,13 @@ public class FlussCatalogPropertiesMetadata extends BaseCatalogPropertiesMetadat
               PropertyEntry.stringOptionalPropertyEntry(
                   SASL_USERNAME, "SASL user the catalog connects as", false, null, false))
           .put(
-              SASL_PASSWORD,
+              SASL_PASSWORD_REF,
               PropertyEntry.stringOptionalPropertyEntry(
-                  SASL_PASSWORD, "SASL password (hidden from the API)", false, null, true))
+                  SASL_PASSWORD_REF,
+                  "Name of the secret that holds the SASL password",
+                  false,
+                  null,
+                  false))
           .put(
               LAKE_CATALOG,
               PropertyEntry.stringOptionalPropertyEntry(
