@@ -98,4 +98,23 @@ public class FlussSecretsTest {
     assertTrue(entries.containsKey("client.security.sasl.password.ref"));
     assertFalse(entries.containsKey("client.security.sasl.password"));
   }
+
+  @Test
+  void creatingACatalogWithAnInlinePasswordIsRefusedBeforeAnythingIsStored() {
+    // Gravitino stores the properties as given and calls testConnection first: the refusal must
+    // happen there
+    FlussCatalogOperations ops = new FlussCatalogOperations();
+    IllegalArgumentException e =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                ops.testConnection(
+                    org.apache.gravitino.NameIdentifier.of("lake", "c"),
+                    org.apache.gravitino.Catalog.Type.RELATIONAL,
+                    "fluss",
+                    "",
+                    Map.of(
+                        "bootstrap.servers", "h:1", "client.security.sasl.password", "inline-pw")));
+    assertFalse(e.getMessage().contains("inline-pw"));
+  }
 }

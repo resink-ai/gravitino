@@ -176,6 +176,13 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       String provider,
       String comment,
       Map<String, String> properties) {
+    // Gravitino stores a catalog's properties as given, before initialize runs: refuse a secret
+    // value here
+    FlussSecrets.rejectInlineSecrets(properties);
+    String ref = properties.get(FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF);
+    if (ref != null) {
+      FlussSecrets.checkRef(ref);
+    }
     try {
       get(admin().listDatabases());
     } catch (Exception e) {
