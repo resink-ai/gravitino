@@ -90,6 +90,37 @@ public class FlussSecretGuardTest {
   }
 
   @Test
+  void aCatalogWiredToAnotherTenantsUserOrReferenceIsRefusedOnCreateEvenForTheService() {
+    FlussSecretGuard g = guard("fluss");
+    assertThrows(
+        ForbiddenException.class,
+        () ->
+            g.onPreEvent(
+                create(
+                    "admin",
+                    "fluss",
+                    Map.of("resink.tenant", "a", "client.security.sasl.username", "b"))));
+    assertThrows(
+        ForbiddenException.class,
+        () ->
+            g.onPreEvent(
+                create(
+                    "admin",
+                    "fluss",
+                    Map.of("resink.tenant", "a", "client.security.sasl.password.ref", "fluss_b"))));
+    assertDoesNotThrow(
+        () ->
+            g.onPreEvent(
+                create(
+                    "admin",
+                    "fluss",
+                    Map.of(
+                        "resink.tenant", "a",
+                        "client.security.sasl.username", "a",
+                        "client.security.sasl.password.ref", "fluss_a"))));
+  }
+
+  @Test
   void otherProvidersAreNotTouched() {
     assertDoesNotThrow(
         () ->

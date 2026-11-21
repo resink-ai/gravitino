@@ -19,6 +19,7 @@
 package org.apache.gravitino.catalog.fluss;
 
 import java.util.Map;
+import org.apache.gravitino.catalog.fluss.guard.TenantBinding;
 
 /**
  * The Fluss user and the secret reference of a tenant's catalog are not settings: they follow from
@@ -42,20 +43,7 @@ final class FlussIdentity {
 
   /** Refuses a user or reference that is not the one derived from the catalog's tenant. */
   static void check(Map<String, String> conf) {
-    String tenant = conf.get(FlussCatalogPropertiesMetadata.TENANT);
-    if (tenant == null || tenant.isEmpty()) {
-      return; // a catalog without a tenant answers only to the platform (FlussCallers)
-    }
-    require(conf, FlussCatalogPropertiesMetadata.SASL_USERNAME, userFor(tenant));
-    require(conf, FlussCatalogPropertiesMetadata.SASL_PASSWORD_REF, refFor(tenant));
-  }
-
-  private static void require(Map<String, String> conf, String key, String derived) {
-    String given = conf.get(key);
-    if (given != null && !given.equals(derived)) {
-      throw new IllegalArgumentException(
-          key + " must be the one derived from " + FlussCatalogPropertiesMetadata.TENANT);
-    }
+    TenantBinding.check(conf);
   }
 
   /** The user to connect as: derived from the tenant when there is one. */

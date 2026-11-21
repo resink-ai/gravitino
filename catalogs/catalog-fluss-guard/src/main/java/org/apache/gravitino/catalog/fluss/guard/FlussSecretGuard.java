@@ -100,6 +100,11 @@ public class FlussSecretGuard implements EventListenerPlugin {
         requireService(preEvent.user());
         if (info.properties() != null) {
           info.properties().keySet().forEach(FlussSecretGuard::check);
+          try {
+            TenantBinding.check(info.properties());
+          } catch (IllegalArgumentException e) {
+            throw new ForbiddenException("%s", e.getMessage());
+          }
         }
       }
     } else if (preEvent instanceof AlterCatalogPreEvent) {
