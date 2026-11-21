@@ -168,6 +168,15 @@ public class FlussSecretGuardTest {
   }
 
   @Test
+  void anUnknownProviderOnAlterNeedsAServicePrincipalToo() {
+    FlussSecretGuard g = guard(null); // the provider lookup failed
+    assertThrows(
+        ForbiddenException.class, () -> g.onPreEvent(alter("tenant_a", "bootstrap.servers")));
+    assertThrows(ForbiddenException.class, () -> g.onPreEvent(alter("tenant_a", "lake.catalog")));
+    assertDoesNotThrow(() -> g.onPreEvent(alter("admin", "bootstrap.servers")));
+  }
+
+  @Test
   void anUnknownProviderGetsTheSameKeyPolicy() {
     FlussSecretGuard g = guard(null);
     assertThrows(ForbiddenException.class, () -> g.onPreEvent(alter("admin", "Password")));

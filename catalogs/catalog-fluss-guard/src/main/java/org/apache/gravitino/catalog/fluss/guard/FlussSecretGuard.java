@@ -122,9 +122,10 @@ public class FlussSecretGuard implements EventListenerPlugin {
     } else if (preEvent instanceof AlterCatalogPreEvent) {
       String provider = providerOf.apply(preEvent.identifier());
       if (provider == null || PROVIDER.equals(provider)) {
-        if (PROVIDER.equals(provider)) {
-          requireService(preEvent.user());
-        }
+        // an unknown provider (a failed lookup) is treated as fluss: fail closed, or a tenant could
+        // alter
+        // bootstrap.servers of another tenant's catalog while the lookup happens to fail
+        requireService(preEvent.user());
         for (CatalogChange change : ((AlterCatalogPreEvent) preEvent).catalogChanges()) {
           if (change instanceof CatalogChange.SetProperty) {
             check(((CatalogChange.SetProperty) change).getProperty());
