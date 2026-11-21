@@ -31,6 +31,9 @@ import org.apache.gravitino.NameIdentifier;
 import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.listener.api.event.AlterCatalogPreEvent;
 import org.apache.gravitino.listener.api.event.CreateCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.DisableCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.DropCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.EnableCatalogPreEvent;
 import org.apache.gravitino.listener.api.info.CatalogInfo;
 import org.junit.jupiter.api.Test;
 
@@ -118,6 +121,23 @@ public class FlussSecretGuardTest {
                         "resink.tenant", "a",
                         "client.security.sasl.username", "a",
                         "client.security.sasl.password.ref", "fluss_a"))));
+  }
+
+  @Test
+  void onlyTheServiceMayDropDisableOrEnableAFlussCatalog() {
+    for (String provider : new String[] {"fluss", null}) { // null: provider cannot be determined
+      FlussSecretGuard g = guard(provider);
+      assertThrows(
+          ForbiddenException.class, () -> g.onPreEvent(new DropCatalogPreEvent("tenant_a", id)));
+      assertThrows(
+          ForbiddenException.class, () -> g.onPreEvent(new DisableCatalogPreEvent("tenant_a", id)));
+      assertThrows(
+          ForbiddenException.class, () -> g.onPreEvent(new EnableCatalogPreEvent("tenant_a", id)));
+      assertDoesNotThrow(() -> g.onPreEvent(new DropCatalogPreEvent("admin", id)));
+      assertDoesNotThrow(() -> g.onPreEvent(new DisableCatalogPreEvent("admin", id)));
+    }
+    assertDoesNotThrow(
+        () -> guard("lakehouse-iceberg").onPreEvent(new DropCatalogPreEvent("tenant_a", id)));
   }
 
   @Test

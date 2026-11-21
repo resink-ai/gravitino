@@ -30,6 +30,9 @@ import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.listener.api.EventListenerPlugin;
 import org.apache.gravitino.listener.api.event.AlterCatalogPreEvent;
 import org.apache.gravitino.listener.api.event.CreateCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.DisableCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.DropCatalogPreEvent;
+import org.apache.gravitino.listener.api.event.EnableCatalogPreEvent;
 import org.apache.gravitino.listener.api.event.PreEvent;
 
 /**
@@ -41,9 +44,9 @@ import org.apache.gravitino.listener.api.event.PreEvent;
  * alteration and denies (403):
  *
  * <ul>
- *   <li>creating or altering a {@code fluss} catalog unless the caller is a service principal
- *       ({@code RESINK_SERVICE_PRINCIPALS}): only the platform wires a catalog to a tenant's
- *       credentials;
+ *   <li>creating, altering, dropping, disabling or enabling a {@code fluss} catalog (or one whose
+ *       provider cannot be determined) unless the caller is a service principal ({@code
+ *       RESINK_SERVICE_PRINCIPALS}): only the platform wires a catalog to a tenant's credentials;
  *   <li>any property that {@link SecretKeys#refused} names, on creation, and on alteration of a
  *       {@code fluss} catalog or of a catalog whose provider cannot be determined.
  * </ul>
@@ -94,7 +97,16 @@ public class FlussSecretGuard implements EventListenerPlugin {
 
   @Override
   public void onPreEvent(PreEvent preEvent) throws ForbiddenException {
-    if (preEvent instanceof CreateCatalogPreEvent) {
+    if (preEvent instanceof DropCatalogPreEvent
+        || preEvent instanceof DisableCatalogPreEvent
+        || preEvent instanceof EnableCatalogPreEvent) {
+      // lifecycle of a catalog: dropping or switching one off takes a tenant's stream tables away.
+      // These never reach the provider, so the authorization plugin is the only other check.
+      String provider = providerOf.apply(preEvent.identifier());
+      if (provider == null || PROVIDER.equals(provider)) {
+        requireService(preEvent.user());
+      }
+    } else if (preEvent instanceof CreateCatalogPreEvent) {
       var info = ((CreateCatalogPreEvent) preEvent).createCatalogRequest();
       if (PROVIDER.equals(info.provider())) {
         requireService(preEvent.user());
