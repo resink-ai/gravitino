@@ -132,10 +132,28 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
             FlussCatalogPropertiesMetadata.FLUSS_SASL_PASSWORD,
             FlussSecrets.resolve(FlussSecrets.secretsDir(), ref));
       }
-      connection = ConnectionFactory.createConnection(c);
-      admin = connection.getAdmin();
+      try {
+        connection = ConnectionFactory.createConnection(c);
+        admin = connection.getAdmin();
+      } catch (RuntimeException e) {
+        if (causedByAuthentication(e)) { // connecting is where Fluss checks the password
+          connection = null;
+          admin = null; // the next call reads the secret file again
+          throw new ConnectionFailedException("Fluss refused the catalog's credentials");
+        }
+        throw e;
+      }
     }
     return admin;
+  }
+
+  static boolean causedByAuthentication(Throwable t) {
+    for (int i = 0; t != null && i < 10; i++, t = t.getCause()) {
+      if (t instanceof AuthenticationException) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Drops the connection so that the next call reads the secret again. */

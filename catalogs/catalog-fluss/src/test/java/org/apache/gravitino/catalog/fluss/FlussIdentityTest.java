@@ -58,4 +58,16 @@ public class FlussIdentityTest {
     assertEquals("a", FlussIdentity.user(conf));
     assertEquals("fluss_a", FlussIdentity.ref(conf));
   }
+
+  @Test
+  void anAuthenticationFailureIsRecognisedThroughWrappingExceptions() {
+    org.apache.fluss.exception.AuthenticationException auth =
+        new org.apache.fluss.exception.AuthenticationException("Invalid username or password");
+    assertEquals(
+        true,
+        FlussCatalogOperations.causedByAuthentication(
+            new RuntimeException("x", new RuntimeException(auth))));
+    assertEquals(
+        false, FlussCatalogOperations.causedByAuthentication(new RuntimeException("other")));
+  }
 }
