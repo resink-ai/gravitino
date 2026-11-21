@@ -83,6 +83,12 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   private Map<String, String> conf;
   private String lakeCatalog;
 
+  /** How a connection is made and where secrets are read from: replaceable in tests. */
+  java.util.function.Function<Configuration, Connection> connector =
+      ConnectionFactory::createConnection;
+
+  java.util.function.Supplier<java.nio.file.Path> secretsDir = FlussSecrets::secretsDir;
+
   /**
    * Only checks the configuration. The connection (and so the secret) is made on first use, so the
    * catalog can be created before the secret is mounted and a rotated secret is read again after a
@@ -130,10 +136,10 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       if (ref != null) {
         c.setString(
             FlussCatalogPropertiesMetadata.FLUSS_SASL_PASSWORD,
-            FlussSecrets.resolve(FlussSecrets.secretsDir(), ref));
+            FlussSecrets.resolve(secretsDir.get(), ref));
       }
       try {
-        connection = ConnectionFactory.createConnection(c);
+        connection = connector.apply(c);
         admin = connection.getAdmin();
       } catch (RuntimeException e) {
         if (causedByAuthentication(e)) { // connecting is where Fluss checks the password
