@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -80,6 +82,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
 
   private Connection connection;
   private Admin admin;
+  private ExecutorService executor;
   private Map<String, String> conf;
   private String lakeCatalog;
 
@@ -108,14 +111,52 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
     this.lakeCatalog = conf.get(FlussCatalogPropertiesMetadata.LAKE_CATALOG);
   }
 
-  private synchronized Admin admin() {
-    // every operation goes through here: the caller must be this catalog's tenant (or the platform)
+  /**
+   * Every operation starts here, on the request's own thread (the principal is bound to it): the
+   * caller must be this catalog's tenant (or the platform).
+   */
+  private void checkCaller() {
     FlussCallers.check(
         conf.get(FlussCatalogPropertiesMetadata.TENANT),
         PrincipalUtils.getCurrentUserName(),
         FlussCallers.servicePrincipals());
     FlussIdentity.check(
         conf); // the stored properties too: refuse a catalog wired to someone else's credentials
+  }
+
+  /**
+   * Runs a Fluss call on this catalog's own thread, never on the caller's. The Fluss client's
+   * shaded Netty keeps a buffer cache in a thread local of every thread that uses it; on one of
+   * Gravitino's pooled web server threads that cache outlives the catalog and, through its classes,
+   * keeps the catalog's class loader (and the client's static allocator, tens of MB) for ever. This
+   * thread ends with the catalog.
+   */
+  private <T> T call(java.util.function.Function<Admin, CompletableFuture<T>> f) throws Exception {
+    checkCaller();
+    try {
+      return executor().submit(() -> get(f.apply(admin()))).get();
+    } catch (ExecutionException e) {
+      throw e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
+    }
+  }
+
+  private synchronized ExecutorService executor() {
+    if (executor == null) {
+      ClassLoader loader = FlussCatalogOperations.class.getClassLoader();
+      executor =
+          Executors.newSingleThreadExecutor(
+              r -> {
+                Thread t = new Thread(r, "fluss-catalog-" + conf.get("resink.tenant"));
+                t.setDaemon(true);
+                t.setContextClassLoader(loader);
+                return t;
+              });
+    }
+    return executor;
+  }
+
+  /** Only on the catalog's own thread. */
+  private synchronized Admin admin() {
     if (admin == null) {
       Configuration c = new Configuration();
       for (String k :
@@ -142,8 +183,15 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
         connection = connector.apply(c);
         admin = connection.getAdmin();
       } catch (RuntimeException e) {
-        if (causedByAuthentication(e)) { // connecting is where Fluss checks the password
+        if (connection != null) { // connected, but no admin: do not leave it open
+          try {
+            connection.close();
+          } catch (Exception ignored) {
+            // the first failure is the one reported
+          }
           connection = null;
+        }
+        if (causedByAuthentication(e)) { // connecting is where Fluss checks the password
           admin = null; // the next call reads the secret file again
           throw new ConnectionFailedException("Fluss refused the catalog's credentials");
         }
@@ -163,10 +211,8 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   }
 
   /** Drops the connection so that the next call reads the secret again. */
-  private synchronized void reset() {
-    close();
-    connection = null;
-    admin = null;
+  private void reset() {
+    closeConnection(false);
   }
 
   /** Maps a failed Fluss call to the exception the caller should see. */
@@ -181,15 +227,47 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
     return e instanceof RuntimeException ? (RuntimeException) e : new RuntimeException(e);
   }
 
+  /**
+   * Closes the connection on the thread that made it. Never waits while holding the lock: that
+   * thread may be waiting for it.
+   */
+  private void closeConnection(boolean last) {
+    Connection c;
+    ExecutorService e;
+    synchronized (this) {
+      c = connection;
+      e = executor;
+      connection = null;
+      admin = null;
+      if (last) {
+        executor = null;
+      }
+    }
+    try {
+      if (c != null) {
+        if (e != null) {
+          e.submit(
+                  () -> {
+                    c.close();
+                    return null;
+                  })
+              .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } else {
+          c.close();
+        }
+      }
+    } catch (Exception ex) {
+      LOG.warn("closing the Fluss connection failed", ex);
+    } finally {
+      if (last && e != null) {
+        e.shutdown(); // its thread, and the thread locals on it, end here
+      }
+    }
+  }
+
   @Override
   public void close() {
-    try {
-      if (connection != null) {
-        connection.close();
-      }
-    } catch (Exception e) {
-      LOG.warn("closing the Fluss connection failed", e);
-    }
+    closeConnection(true);
   }
 
   private static <T> T get(CompletableFuture<T> f) throws Exception {
@@ -220,7 +298,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       FlussSecrets.checkRef(ref);
     }
     try {
-      get(admin().listDatabases());
+      call(a -> a.listDatabases());
     } catch (Exception e) {
       throw new ConnectionFailedException(
           e, "Failed to list databases on Fluss: %s", e.getMessage());
@@ -232,7 +310,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   @Override
   public NameIdentifier[] listSchemas(Namespace namespace) throws NoSuchCatalogException {
     try {
-      return get(admin().listDatabases()).stream()
+      return call(a -> a.listDatabases()).stream()
           .map(d -> NameIdentifier.of(namespace, d))
           .toArray(NameIdentifier[]::new);
     } catch (Exception e) {
@@ -249,7 +327,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       if (properties != null) {
         b.customProperties(properties);
       }
-      get(admin().createDatabase(ident.name(), b.build(), false));
+      call(a -> a.createDatabase(ident.name(), b.build(), false));
     } catch (DatabaseAlreadyExistException e) {
       throw new SchemaAlreadyExistsException(e, "Fluss database %s already exists", ident);
     } catch (Exception e) {
@@ -267,7 +345,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   @Override
   public FlussSchema loadSchema(NameIdentifier ident) throws NoSuchSchemaException {
     try {
-      DatabaseInfo info = get(admin().getDatabaseInfo(ident.name()));
+      DatabaseInfo info = call(a -> a.getDatabaseInfo(ident.name()));
       return FlussSchema.builder()
           .withName(ident.name())
           .withComment(info.getDatabaseDescriptor().getComment().orElse(null))
@@ -293,7 +371,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   @Override
   public boolean dropSchema(NameIdentifier ident, boolean cascade) throws NonEmptySchemaException {
     try {
-      get(admin().dropDatabase(ident.name(), true, cascade));
+      call(a -> a.dropDatabase(ident.name(), true, cascade));
       return true;
     } catch (DatabaseNotEmptyException e) {
       throw new NonEmptySchemaException(e, "Fluss database %s is not empty", ident);
@@ -313,7 +391,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   public NameIdentifier[] listTables(Namespace namespace) throws NoSuchSchemaException {
     String[] levels = namespace.levels();
     try {
-      return get(admin().listTables(levels[levels.length - 1])).stream()
+      return call(a -> a.listTables(levels[levels.length - 1])).stream()
           .map(t -> NameIdentifier.of(namespace, t))
           .toArray(NameIdentifier[]::new);
     } catch (DatabaseNotExistException e) {
@@ -326,11 +404,11 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   @Override
   public FlussTable loadTable(NameIdentifier ident) throws NoSuchTableException {
     try {
-      TableInfo info = get(admin().getTableInfo(path(ident)));
+      TableInfo info = call(a -> a.getTableInfo(path(ident)));
       Long snapshot = null;
       if ("true".equals(info.getProperties().toMap().get("table.datalake.enabled"))) {
         try {
-          snapshot = get(admin().getLatestLakeSnapshot(info.getTablePath())).getSnapshotId();
+          snapshot = call(a -> a.getLatestLakeSnapshot(info.getTablePath())).getSnapshotId();
         } catch (Exception ignored) {
           // no tiered snapshot yet
         }
@@ -358,7 +436,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
         FlussTables.descriptor(
             columns, comment, properties, partitioning, distribution, sortOrders, indexes);
     try {
-      get(admin().createTable(path(ident), descriptor, false));
+      call(a -> a.createTable(path(ident), descriptor, false));
     } catch (DatabaseNotExistException e) {
       throw new NoSuchSchemaException(e, "Fluss database does not exist for %s", ident);
     } catch (TableAlreadyExistException e) {
@@ -376,7 +454,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
       throws NoSuchTableException, IllegalArgumentException {
     List<org.apache.fluss.metadata.TableChange> fc = FlussTableChanges.toFluss(changes);
     try {
-      get(admin().alterTable(path(ident), fc, false));
+      call(a -> a.alterTable(path(ident), fc, false));
     } catch (TableNotExistException e) {
       throw new NoSuchTableException(e, "Fluss table %s does not exist", ident);
     } catch (Exception e) {
@@ -388,7 +466,7 @@ public class FlussCatalogOperations implements CatalogOperations, SupportsSchema
   @Override
   public boolean dropTable(NameIdentifier ident) {
     try {
-      get(admin().dropTable(path(ident), true));
+      call(a -> a.dropTable(path(ident), true));
       return true;
     } catch (Exception e) {
       throw fail(e);
